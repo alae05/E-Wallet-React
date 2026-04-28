@@ -1,18 +1,21 @@
-import { useState } from 'react';
-import { getbeneficiaries, findbeneficiarieByid } from './Model/database.js';
+import { useState, useEffect } from 'react';
+import { getbeneficiaries } from './Model/database.js';
 import './App.css';
 
 function Dashboard({ user, setUser, setCurrentView }) {
-  // --- UI State ---
   const [activeSection, setActiveSection] = useState('overview');
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isRechargeOpen, setIsRechargeOpen] = useState(false);
 
-  // --- Form State ---
-  const [transferData, setTransferData] = useState({ beneficiary: '', sourceCard: '', amount: '' });
-  const [rechargeData, setRechargeData] = useState({ sourceCard: '', amount: '' });
+  const [tBeneficiary, setTBeneficiary] = useState('');
+  const [tSourceCard, setTSourceCard] = useState('');
+  const [tAmount, setTAmount] = useState('');
 
-  // --- Derived Data (calculated safely on every render) ---
+  const [rSourceCard, setRSourceCard] = useState('');
+  const [rAmount, setRAmount] = useState('');
+  
+  const [beneficiaries, setBeneficiaries] = useState([]);
+
   const transactions = user?.wallet?.transactions || [];
   const cards = user?.wallet?.cards || [];
   
@@ -24,7 +27,29 @@ function Dashboard({ user, setUser, setCurrentView }) {
     .filter(t => t.type === "debit")
     .reduce((total, t) => total + t.amount, 0);
 
-  // --- Handlers ---
+  useEffect(() => {
+    if (user) {
+      sessionStorage.setItem("currentUser", JSON.stringify(user));
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user && user.id) {
+      const data = getbeneficiaries(user.id);
+      setBeneficiaries(data);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user && user.name) {
+      const originalTitle = document.title;
+      document.title = `Espace Client - ${user.name}`;
+      return () => {
+        document.title = originalTitle; 
+      };
+    }
+  }, [user?.name]);
+
   const handleLogout = () => {
     sessionStorage.removeItem("currentUser");
     setUser(null);
@@ -33,91 +58,91 @@ function Dashboard({ user, setUser, setCurrentView }) {
 
   const handleTransferSubmit = (e) => {
     e.preventDefault();
-    const amount = Number(transferData.amount);
+    const amount = Number(tAmount);
+    const updatedUser = JSON.parse(JSON.stringify(user));
+    const cardIndex = updatedUser.wallet.cards.findIndex(c => c.numcards === tSourceCard);
 
-    if (user.wallet.balance < amount) {
-      alert("Erreur: Solde insuffisant.");
+    if (cardIndex === -1) {
+      alert("Veuillez sélectionner une carte.");
       return;
     }
 
-    const beneficiary = findbeneficiarieByid(user.id, transferData.beneficiary);
+    if (updatedUser.wallet.cards[cardIndex].balance < amount) {
+      alert(`Transfert refusé : Solde de la carte insuffisant (${updatedUser.wallet.cards[cardIndex].balance} MAD).`);
+      return;
+    }
+
+    const beneficiary = beneficiaries.find(b => b.id.toString() === tBeneficiary);
     if (!beneficiary) {
       alert("Erreur: Bénéficiaire introuvable.");
       return;
     }
 
     const newTransaction = {
-      id: Date.now(),
+      id: Date.now().toString(),
       type: "debit",
       amount: amount,
       date: new Date().toLocaleString("fr-FR"),
+      from: tSourceCard,
       to: beneficiary.name,
       statue: "success"
     };
-
-    // Deep copy state update
-    const updatedUser = { 
-      ...user,
-      wallet: {
-        ...user.wallet,
-        balance: user.wallet.balance - amount,
-        transactions: [...transactions, newTransaction]
-      }
-    };
+    
+    updatedUser.wallet.cards[cardIndex].balance = updatedUser.wallet.cards[cardIndex].balance - amount;
+    updatedUser.wallet.balance = updatedUser.wallet.balance - amount;
+    updatedUser.wallet.transactions.push(newTransaction);
     
     setUser(updatedUser);
-    sessionStorage.setItem("currentUser", JSON.stringify(updatedUser));
-    
     setIsTransferOpen(false);
-    setTransferData({ beneficiary: '', sourceCard: '', amount: '' });
-    alert(`Transfert de ${amount} MAD vers ${beneficiary.name} réussi !`);
+    setTBeneficiary('');
+    setTSourceCard('');
+    setTAmount('');
+    alert(`Transfert de ${amount} MAD réussi !`);
   };
 
   const handleRechargeSubmit = (e) => {
     e.preventDefault();
-    const amount = Number(rechargeData.amount);
+    const amount = Number(rAmount);
+    const updatedUser = JSON.parse(JSON.stringify(user));
+    const cardIndex = updatedUser.wallet.cards.findIndex(c => c.numcards === rSourceCard);
 
-    if (amount < 10 || amount > 5000) {
-      alert("Le montant doit être compris entre 10 et 5000 MAD.");
+    if (cardIndex === -1) {
+      alert("Veuillez sélectionner une carte.");
+      return;
+    }
+
+    if (updatedUser.wallet.cards[cardIndex].balance < amount) {
+      alert(`Recharge impossible : Votre carte n'a que ${updatedUser.wallet.cards[cardIndex].balance} MAD.`);
       return;
     }
 
     const newTransaction = {
-      id: Date.now(),
+      id: Date.now().toString(),
       type: "recharge",
       amount: amount,
       date: new Date().toLocaleString("fr-FR"),
-      to: user.name,
+      from: rSourceCard,
+      to: "Solde Principal",
       statue: "success"
     };
 
-    // Deep copy state update
-    const updatedUser = { 
-      ...user,
-      wallet: {
-        ...user.wallet,
-        balance: user.wallet.balance + amount,
-        transactions: [...transactions, newTransaction]
-      }
-    };
+    updatedUser.wallet.cards[cardIndex].balance = updatedUser.wallet.cards[cardIndex].balance - amount;
+    updatedUser.wallet.balance = updatedUser.wallet.balance + amount;
+    updatedUser.wallet.transactions.push(newTransaction);
     
     setUser(updatedUser);
-    sessionStorage.setItem("currentUser", JSON.stringify(updatedUser));
-    
     setIsRechargeOpen(false);
-    setRechargeData({ sourceCard: '', amount: '' });
-    alert(`Recharge de ${amount} MAD réussie !`);
+    setRSourceCard('');
+    setRAmount('');
+    alert(`Recharge de ${amount} MAD effectuée avec succès !`);
   };
 
-  // Guard clause: Ensure user exists before rendering to prevent crashes
   if (!user) return null;
 
   return (
     <>
       <main className="dashboard-main">
         <div className="dashboard-container">
-          
-          {/* --- SIDEBAR --- */}
           <aside className="dashboard-sidebar">
             <nav className="sidebar-nav">
               <ul>
@@ -144,10 +169,7 @@ function Dashboard({ user, setUser, setCurrentView }) {
             </nav>
           </aside>
 
-          {/* --- MAIN CONTENT --- */}
           <div className="dashboard-content">
-            
-            {/* OVERVIEW SECTION */}
             {activeSection === 'overview' && (
               <section id="overview" className="dashboard-section active">
                 <div className="section-header">
@@ -209,7 +231,6 @@ function Dashboard({ user, setUser, setCurrentView }) {
                     <h3>Transactions récentes</h3>
                   </div>
                   <div className="transactions-list">
-                    {/* Reverse the array to show newest first */}
                     {transactions.slice().reverse().map((t, index) => (
                       <div key={t.id || index} className="transaction-item">
                         <div className="transaction-details">
@@ -232,7 +253,6 @@ function Dashboard({ user, setUser, setCurrentView }) {
               </section>
             )}
 
-            {/* CARDS SECTION */}
             {activeSection === 'cards' && (
               <section id="cards" className="dashboard-section active">
                 <div className="section-header">
@@ -241,7 +261,6 @@ function Dashboard({ user, setUser, setCurrentView }) {
                     <i className="fas fa-plus"></i> Ajouter une carte
                   </button>
                 </div>
-                
                 <div className="cards-grid">
                   {cards.map((card, index) => (
                     <div key={index} className="card-item">
@@ -253,24 +272,19 @@ function Dashboard({ user, setUser, setCurrentView }) {
                         <div className="card-type">{card.type}</div>
                       </div>
                       <div className="card-actions">
-                        <button className="card-action" title="Définir par défaut"><i className="fas fa-star"></i></button>
-                        <button className="card-action" title="Geler la carte"><i className="fas fa-snowflake"></i></button>
-                        <button className="card-action" title="Supprimer"><i className="fas fa-trash"></i></button>
+                        <button className="card-action"><i className="fas fa-star"></i></button>
+                        <button className="card-action"><i className="fas fa-snowflake"></i></button>
+                        <button className="card-action"><i className="fas fa-trash"></i></button>
                       </div>
                     </div>
                   ))}
-                  {cards.length === 0 && <p style={{ color: '#666' }}>Aucune carte disponible.</p>}
                 </div>
               </section>
             )}
-
           </div>
         </div>
       </main>
 
-      {/* --- POPUPS --- */}
-
-      {/* Transfer Popup */}
       {isTransferOpen && (
         <div className="popup-overlay active">
           <div className="popup-content">
@@ -285,11 +299,11 @@ function Dashboard({ user, setUser, setCurrentView }) {
                   <select 
                     id="beneficiary" 
                     required 
-                    value={transferData.beneficiary}
-                    onChange={(e) => setTransferData({...transferData, beneficiary: e.target.value})}
+                    value={tBeneficiary}
+                    onChange={(e) => setTBeneficiary(e.target.value)}
                   >
                     <option value="" disabled>Choisir un bénéficiaire</option>
-                    {getbeneficiaries(user.id).map(b => (
+                    {beneficiaries.map(b => (
                       <option key={b.id} value={b.id}>{b.name}</option>
                     ))}
                   </select>
@@ -300,13 +314,13 @@ function Dashboard({ user, setUser, setCurrentView }) {
                   <select 
                     id="sourceCard" 
                     required
-                    value={transferData.sourceCard}
-                    onChange={(e) => setTransferData({...transferData, sourceCard: e.target.value})}
+                    value={tSourceCard}
+                    onChange={(e) => setTSourceCard(e.target.value)}
                   >
                     <option value="" disabled>Sélectionner une carte</option>
                     {cards.map(card => (
                       <option key={card.numcards} value={card.numcards}>
-                        {card.type} ****{card.numcards.slice(-4)}
+                        {card.type.toUpperCase()} ****{card.numcards.slice(-4)} ({card.balance} MAD)
                       </option>
                     ))}
                   </select>
@@ -320,10 +334,9 @@ function Dashboard({ user, setUser, setCurrentView }) {
                       id="amount" 
                       min="1" 
                       step="0.01" 
-                      placeholder="0.00" 
                       required
-                      value={transferData.amount}
-                      onChange={(e) => setTransferData({...transferData, amount: e.target.value})}
+                      value={tAmount}
+                      onChange={(e) => setTAmount(e.target.value)}
                     />
                     <span className="currency">MAD</span>
                   </div>
@@ -331,7 +344,7 @@ function Dashboard({ user, setUser, setCurrentView }) {
                 
                 <div className="form-actions" style={{ marginTop: '20px' }}>
                   <button type="button" className="btn btn-secondary" onClick={() => setIsTransferOpen(false)}>Annuler</button>
-                  <button type="submit" className="btn btn-primary"><i className="fas fa-paper-plane"></i> Transférer</button>
+                  <button type="submit" className="btn btn-primary">Transférer</button>
                 </div>
               </form>
             </div>
@@ -339,7 +352,6 @@ function Dashboard({ user, setUser, setCurrentView }) {
         </div>
       )}
 
-      {/* Recharge Popup */}
       {isRechargeOpen && (
         <div className="popup-overlay active">
           <div className="popup-content">
@@ -354,13 +366,13 @@ function Dashboard({ user, setUser, setCurrentView }) {
                   <select 
                     id="sourceCard2" 
                     required
-                    value={rechargeData.sourceCard}
-                    onChange={(e) => setRechargeData({...rechargeData, sourceCard: e.target.value})}
+                    value={rSourceCard}
+                    onChange={(e) => setRSourceCard(e.target.value)}
                   >
                     <option value="" disabled>Sélectionner une carte</option>
                     {cards.map(card => (
                       <option key={card.numcards} value={card.numcards}>
-                        {card.type} ****{card.numcards.slice(-4)}
+                        {card.type.toUpperCase()} ****{card.numcards.slice(-4)} ({card.balance} MAD)
                       </option>
                     ))}
                   </select>
@@ -374,10 +386,9 @@ function Dashboard({ user, setUser, setCurrentView }) {
                       id="amount2" 
                       min="10" 
                       step="0.01" 
-                      placeholder="0.00" 
                       required
-                      value={rechargeData.amount}
-                      onChange={(e) => setRechargeData({...rechargeData, amount: e.target.value})}
+                      value={rAmount}
+                      onChange={(e) => setRAmount(e.target.value)}
                     />
                     <span className="currency">MAD</span>
                   </div>
@@ -385,7 +396,7 @@ function Dashboard({ user, setUser, setCurrentView }) {
 
                 <div className="form-actions" style={{ marginTop: '20px' }}>
                   <button type="button" className="btn btn-secondary" onClick={() => setIsRechargeOpen(false)}>Annuler</button>
-                  <button type="submit" className="btn btn-primary"><i className="fas fa-plus-circle"></i> Recharger</button>
+                  <button type="submit" className="btn btn-primary">Recharger</button>
                 </div>
               </form>
             </div>
